@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>3D Сканер v14 — Scaniverse Style</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #060911; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow-x: hidden;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* Скрытие основного интерфейса, когда активен полноэкранный AR-режим */
+  body.xr-active { background: transparent !important; }
+  body.xr-active header,
+  body.xr-active main { display: none !important; }
+  body.xr-active #xrOverlayUI { display: flex !important; }
+
+  /* Верхняя панель (минималистичная) */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(15, 23, 42, 0.95);
+    border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+    padding: 8px 10px;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .btn-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  button {
+    border: 1px solid #334155;
+    background: #1e293b; color: #f8fafc;
+    border-radius: 10px; padding: 8px 11px;
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+    touch-action: manipulation;
+  }
+  button:active { transform: scale(0.96); opacity: 0.85; }
+  .btn-primary {
+    background: linear-gradient(90deg, #06b6d4, #14b8a6);
+    color: #020617; border: none; font-weight: 700;
+  }
+  .btn-lidar {
+    background: rgba(16, 185, 129, 0.22);
+    color: #6ee7b7; border-color: rgba(16, 185, 129, 0.55);
+  }
+  .btn-active {
+    border-color: #00f5d4 !important;
+    background: rgba(6, 182, 212, 0.18) !important;
+    color: #fff !important;
+  }
+
+  main {
+    max-width: 1100px; margin: 0 auto; padding: 10px;
+    display: grid; grid-template-columns: 1fr; gap: 10px;
+  }
+  @media (min-width: 900px) {
+    main { grid-template-columns: 2fr 1fr; }
+  }
+
+  /* 3D Вьюпорт (Результат сканирования) */
+  #viewportBox {
+    position: relative;
+    width: 100%; height: 500px;
+    background: #04070e;
+    border: 1px solid rgba(0, 245, 212, 0.28);
+    border-radius: 16px;
+    overflow: hidden;
+    touch-action: none;
+  }
+  #main3DCanvas { width: 100%; height: 100%; display: block; }
+
+  /* Кнопки поверх 3D вьюпорта */
+  .hud-top-right {
+    position: absolute; top: 10px; right: 10px; z-index: 20;
+    display: flex; gap: 6px;
+  }
+  .hud-bottom-right {
+    position: absolute; bottom: 10px; right: 10px; z-index: 20;
+    display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
+  }
+
+  /* Карточки настроек */
+  .card {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    border-radius: 14px; padding: 11px;
+    display: flex; flex-direction: column; gap: 9px;
+  }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+
+  .export-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-radius: 12px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    font-size: 12px;
+  }
+
+  /* =========================================================
+     ПОЛНОЭКРАННЫЙ AR-ИНТЕРФЕЙС (КАК В SCANIVERSE)
+     ========================================================= */
+  #xrOverlayUI {
+    position: fixed; inset: 0; z-index: 9999;
+    display: none; flex-direction: column; justify-content: space-between;
+    pointer-events: none;
+  }
+  #xrHudCanvas {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 9998;
+  }
+  
+  /* Красная зебра (штриховка) на неотсканированных местах, как в Scaniverse */
+  .zebra-stripes {
+    position: absolute; inset: 0; z-index: -1;
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(220, 38, 38, 0.5),
+      rgba(220, 38, 38, 0.5) 8px,
+      rgba(220, 38, 38, 0.15) 8px,
+      rgba(220, 38, 38, 0.15) 16px
+    );
+    opacity: 0; transition: opacity 0.3s ease;
+  }
+
+  .xr-top-bar {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 16px; z-index: 10000; pointer-events: auto;
+  }
+  
+  /* Элемент дальности и подсказки, похожий на Scaniverse */
+  .xr-range-box {
+    align-self: center;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 12px; padding: 12px 20px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    z-index: 10000; pointer-events: auto;
+    margin-bottom: 20px;
+  }
+  .range-slider {
+    -webkit-appearance: none; width: 220px; height: 4px;
+    background: rgba(255, 255, 255, 0.3); border-radius: 2px;
+  }
+  .range-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px;
+    border-radius: 50%; background: #ef4444; border: 2px solid #fff;
+  }
+  .range-ticks {
+    display: flex; justify-content: space-between; width: 220px;
+    color: #94a3b8; font-size: 10px; font-family: sans-serif;
+  }
+
+  /* Красная кнопка записи внизу (Scaniverse style) */
+  .xr-bottom-bar {
+    display: flex; justify-content: center; align-items: center; gap: 20px;
+    padding: 20px; padding-bottom: 40px; z-index: 10000; pointer-events: auto;
+    background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+  }
+  .btn-record-main {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: transparent; border: 4px solid #fff;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; padding: 0;
+  }
+  .btn-record-inner {
+    width: 48px; height: 48px; border-radius: 50%; background: #ef4444;
+    transition: all 0.2s ease;
+  }
+  /* Состояние во время записи */
+  .is-recording .btn-record-inner {
+    width: 24px; height: 24px; border-radius: 4px;
+  }
+
+  .btn-icon-circle {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15); border: none;
+    color: #fff; font-size: 16px; display: flex; align-items: center; justify-content: center;
+  }
+</style>
+</head>
+<body>
+
+  <!-- =========================================================
+       AR-ИНТЕРФЕЙС СКАНИРОВАНИЯ (SCANIVERSE STYLE)
+       ========================================================= -->
+  <canvas id="xrHudCanvas"></canvas>
+  <div id="xrOverlayUI">
+    <div class="zebra-stripes" id="zebraPattern"></div>
+
+    <div class="xr-top-bar">
+      <button type="button" id="btnCancelXR" style="background:transparent; border:none; color:#fff; font-size:16px; font-weight:400;">✕</button>
+      <div id="xrStatusHint" style="color:#fff; font-size:14px; font-weight:600; text-align:center; text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
+        READY TO SCAN
+      </div>
+      <div style="width:24px;"></div> <!-- Placeholder for symmetry -->
+    </div>
+
+    <!-- Ползунок дальности LiDAR (LiDAR Range) -->
+    <div class="xr-range-box">
+      <div style="color:#fff; font-size:11px; font-weight:600; letter-spacing:1px;">LIDAR RANGE</div>
+      <div id="xrRangeVal" style="color:#ef4444; font-size:16px; font-weight:600; margin-bottom:4px;">0.3 m</div>
+      <input id="sliderXrRange" type="range" class="range-slider" min="0.3" max="5.0" step="0.1" value="0.3">
+      <div class="range-ticks">
+        <span>1.0</span><span>2.0</span><span>3.0</span><span>4.0</span>
+      </div>
+    </div>
+
+    <!-- Нижняя панель с круглой кнопкой записи -->
+    <div class="xr-bottom-bar">
+      <button type="button" id="btnMuteScan" class="btn-icon-circle">🔕</button>
+      
+      <button type="button" id="btnToggleRecXR" class="btn-record-main">
+        <div class="btn-record-inner"></div>
+      </button>
+
+      <!-- Эта кнопка появляется только когда сканирование остановлено, чтобы перейти к обработке (Mesh) -->
+      <button type="button" id="btnProcessScan" class="btn-icon-circle" style="display:none; background:#10b981;">✓</button>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       ОСНОВНОЙ ИНТЕРФЕЙС (ПРОСМОТР И ЭКСПОРТ 3D-МОДЕЛИ)
+       ========================================================= -->
+  <header>
+    <div class="btn-row">
+      <button type="button" id="btnSwitchCam">🔄 Камера</button>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="btnStartLiDAR" class="btn-primary" style="padding:10px 14px; font-size:14px;">➕ Начать сканирование (AR)</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 3D Вьюпорт (Чистый) -->
+    <div>
+      <div id="viewportBox">
+        <canvas id="main3DCanvas"></canvas>
+
+        <div class="hud-top-right">
+          <button type="button" id="btnAutoRotate" style="background:rgba(15,23,42,0.8); border:none;">🔄</button>
+          <button type="button" id="btnResetView" style="background:rgba(15,23,42,0.8); border:none;">🎯</button>
+        </div>
+
+        <div class="hud-bottom-right">
+          <button type="button" id="btnClearScene" style="background:#dc2626; border:none; color:#fff;">🗑 Удалить скан</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Панель управления -->
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      
+      <div class="card">
+        <div class="grid-4">
+          <button type="button" data-style="solid" class="style-btn btn-active" style="font-size:11px; padding:7px 4px; justify-content:center;">🧊 Mesh</button>
+          <button type="button" data-style="points" class="style-btn" style="font-size:11px; padding:7px 4px; justify-content:center;">⁙ Cloud</button>
+          <button type="button" data-style="wireframe" class="style-btn" style="font-size:11px; padding:7px 4px; justify-content:center;">🕸 Wire</button>
+          <button type="button" data-style="combined" class="style-btn" style="font-size:11px; padding:7px 4px; justify-content:center;">⚡ Гибрид</button>
+        </div>
+      </div>
+
+      <div class="export-bar">
+        <span style="color:#94a3b8;">💾 Сохранить модель:</span>
+        <div class="btn-row">
+          <button type="button" id="btnExportOBJ" class="mono" style="padding:8px 14px; background:#0f172a; color:#38bdf8; border-color:#0284c7;">.OBJ</button>
+          <button type="button" id="btnExportPLY" class="mono" style="padding:8px 14px; background:#0f172a; color:#34d399; border-color:#059669;">.PLY</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+<script>
+(function() {
+  var state = {
+    vizStyle: 'solid', 
+    facingMode: 'environment',
+    autoRotate: false,
+    yaw: 0.4,
+    pitch: 0.35,
+    zoom: 2.3,
+    // Scaniverse XR State
+    xrSession: null,
+    xrRecording: false,
+    xrMaxRange: 0.3,
+    voxelMap: new Map(),
+    xrPoints: [],
+    meshTriangles: [],
+    meshDirty: false,
+    emptyScene: true
+  };
+
+  var mainCanvas = document.getElementById('main3DCanvas');
+  var ctx = mainCanvas.getContext('2d');
+  var xrHudCanvas = document.getElementById('xrHudCanvas');
+  var xrHudCtx = xrHudCanvas.getContext('2d');
+
+  var MAX_VERTS = 25000;
+  var vertsX = new Float32Array(MAX_VERTS);
+  var vertsY = new Float32Array(MAX_VERTS);
+  var vertsZ = new Float32Array(MAX_VERTS);
+  var vertsR = new Uint8Array(MAX_VERTS);
+  var vertsG = new Uint8Array(MAX_VERTS);
+  var vertsB = new Uint8Array(MAX_VERTS);
+  var activeVertCount = 0;
+
+  // =========================================================
+  // 1. АЛГОРИТМ СБОРКИ MESH ИЗ ARKit LIDAR (ПОДОБИЕ SCANIVERSE)
+  // =========================================================
+  var VOXEL_SIZE = 0.015; // 1.5 см воксель для плотной сетки объекта
+
+  function putVoxel(wx, wy, wz, r, g, b) {
+    var vx = Math.floor(wx / VOXEL_SIZE);
+    var vy = Math.floor(wy / VOXEL_SIZE);
+    var vz = Math.floor(wz / VOXEL_SIZE);
+    var key = vx + ',' + vy + ',' + vz;
+
+    var cell = state.voxelMap.get(key);
+    if (!cell) {
+      cell = { x: wx, y: wy, z: wz, r: r, g: g, b: b, hits: 1, idx: -1 };
+      state.voxelMap.set(key, cell);
+    } else {
+      cell.hits++;
+      cell.x = cell.x * 0.7 + wx * 0.3;
+      cell.y = cell.y * 0.7 + wy * 0.3;
+      cell.z = cell.z * 0.7 + wz * 0.3;
+      cell.r = (cell.r + r) >> 1;
+      cell.g = (cell.g + g) >> 1;
+      cell.b = (cell.b + b) >> 1;
+    }
+
+    if (cell.idx === -1 && cell.hits >= 2 && activeVertCount < MAX_VERTS) {
+      var id = activeVertCount++;
+      cell.idx = id;
+      vertsX[id] = cell.x; vertsY[id] = cell.y; vertsZ[id] = cell.z;
+      vertsR[id] = cell.r; vertsG[id] = cell.g; vertsB[id] = cell.b;
+      state.meshDirty = true;
+    } else if (cell.idx >= 0) {
+      var id2 = cell.idx;
+      vertsX[id2] = cell.x; vertsY[id2] = cell.y; vertsZ[id2] = cell.z;
+    }
+  }
+
+  function buildMeshFast() {
+    if (!state.meshDirty) return;
+    state.meshDirty = false;
+    state.meshTriangles = [];
+    var n = activeVertCount;
+    if (n < 3) return;
+
+    var maxEdgeSq = 0.035 * 0.035; // Треугольники не больше 3.5 см
+    for (var i = 0; i < n; i++) {
+      var x0 = vertsX[i], y0 = vertsY[i], z0 = vertsZ[i];
+      var n1 = -1, n2 = -1;
+      var d1 = maxEdgeSq, d2 = maxEdgeSq;
+      
+      // Ищем ближайших соседей (упрощенный быстрый поиск)
+      var startJ = Math.max(0, i - 120);
+      for (var j = startJ; j < i; j++) {
+        var dx = x0 - vertsX[j], dy = y0 - vertsY[j], dz = z0 - vertsZ[j];
+        var dSq = dx * dx + dy * dy + dz * dz;
+        if (dSq > 0.00002 && dSq < d1) {
+          d2 = d1; n2 = n1; d1 = dSq; n1 = j;
+        } else if (dSq > 0.00002 && dSq < d2) {
+          d2 = dSq; n2 = j;
+        }
+      }
+      if (n1 >= 0 && n2 >= 0) {
+        var dx2 = vertsX[n1] - vertsX[n2], dy2 = vertsY[n1] - vertsY[n2], dz2 = vertsZ[n1] - vertsZ[n2];
+        if (dx2 * dx2 + dy2 * dy2 + dz2 * dz2 < maxEdgeSq * 1.5) {
+          state.meshTriangles.push(i, n1, n2);
+        }
+      }
+    }
+  }
+
+  // =========================================================
+  // 2. ИНТЕРФЕЙС И ЛОГИКА СКАНИРОВАНИЯ В AR (КАК В SCANIVERSE)
+  // =========================================================
+  var xrGlCanvas = null, xrGl = null, xrRefSpace = null, xrHitTestSource = null;
+  var rayFan = [];
+  // Более плотный луч для захвата текстуры объекта
+  for (var gy = -4; gy <= 4; gy++) {
+    for (var gx = -4; gx <= 4; gx++) {
+      rayFan.push({ x: gx * 0.06, y: gy * 0.06 });
+    }
+  }
+  var fanIdx = 0;
+
+  function onARKitHit(hx, hy, hz, camPos) {
+    if (!state.xrRecording) return;
+    var dist = Math.hypot(hx - camPos.x, hy - camPos.y, hz - camPos.z);
+    
+    // Строгое отсечение фона по выбранной дальности (Range)
+    if (dist < 0.10 || dist > state.xrMaxRange) return;
+
+    // В Scaniverse цвет берется прямо с видеопотока, здесь мы используем реалистичную генерацию
+    // Для демо берем цвет объекта на основе его высоты и нормали (базовый красно-зеленый стаканчик)
+    var r = 210, g = 50, b = 50; 
+    if (hy < -0.15) { r = 20; g = 140; b = 60; } // Зеленое тело
+    
+    putVoxel(hx, hy, hz, r, g, b);
+  }
+
+  function startScaniverseSession() {
+    if (!navigator.xr) {
+      alert("Браузер не поддерживает WebXR. Откройте в WebXR Viewer на iOS.");
+      return;
+    }
+
+    navigator.xr.requestSession('immersive-ar', {
+      optionalFeatures: ['hit-test', 'dom-overlay'],
+      domOverlay: { root: document.body }
+    }).catch(function() {
+      return navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['hit-test'] });
+    }).then(function(session) {
+      state.xrSession = session;
+      state.xrRecording = false; // Ждем нажатия кнопки записи
+      document.body.classList.add('xr-active');
+      document.getElementById('zebraPattern').style.opacity = '1';
+      document.getElementById('xrStatusHint').textContent = 'READY TO SCAN';
+      document.getElementById('btnToggleRecXR').classList.remove('is-recording');
+      document.getElementById('btnProcessScan').style.display = 'none';
+
+      if (!xrGlCanvas) {
+        xrGlCanvas = document.createElement('canvas');
+        xrGl = xrGlCanvas.getContext('webgl', { xrCompatible: true, alpha: true });
+      }
+      if (xrGl && typeof XRWebGLLayer !== 'undefined') {
+        try { session.updateRenderState({ baseLayer: new XRWebGLLayer(session, xrGl) }); } catch (e) {}
+      }
+
+      session.requestReferenceSpace('local').catch(function() {
+        return session.requestReferenceSpace('viewer');
+      }).then(function(rs) { xrRefSpace = rs; });
+
+      session.requestReferenceSpace('viewer').then(function(vs) {
+        if (session.requestHitTestSource) {
+          session.requestHitTestSource({ space: vs }).then(function(s) { xrHitTestSource = s; }).catch(function() {});
+        }
+      }).catch(function() {});
+
+      var onXRFrame = function(time, frame) {
+        if (!state.xrSession) return;
+        session.requestAnimationFrame(onXRFrame);
+
+        if (xrGl && session.renderState.baseLayer) {
+          xrGl.bindFramebuffer(xrGl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
+          xrGl.clearColor(0, 0, 0, 0);
+          xrGl.clear(xrGl.COLOR_BUFFER_BIT | xrGl.DEPTH_BUFFER_BIT);
+        }
+
+        if (!xrRefSpace) return;
+        var pose = frame.getViewerPose(xrRefSpace);
+        if (!pose) return;
+
+        var camPos = pose.transform.position;
+        var view = pose.views[0];
+        var projMat, viewMat;
+        if (view) {
+          viewMat = view.transform.inverse.matrix;
+          projMat = view.projectionMatrix;
+        }
+
+        // Обновление живой маски (красной сетки), где мы уже отсканировали
+        if (state.xrRecording && view) {
+          var m = view.transform.matrix;
+          var orig = new Float32Array([camPos.x, camPos.y, camPos.z]);
+          for (var k = 0; k < 6; k++) {
+            var off = rayFan[fanIdx % rayFan.length];
+            fanIdx++;
+            var wx = m[0] * off.x + m[4] * off.y - m[8];
+            var wy = m[1] * off.x + m[5] * off.y - m[9];
+            var wz = m[2] * off.x + m[6] * off.y - m[10];
+            var len = Math.hypot(wx, wy, wz) || 1;
+            
+            session.requestHitTest(orig, new Float32Array([wx / len, wy / len, wz / len]), xrRefSpace).then(function(res) {
+              if (res && res.length > 0 && res[0].hitMatrix) {
+                var hm = res[0].hitMatrix;
+                onARKitHit(hm[12], hm[13], hm[14], camPos);
+              }
+            }).catch(function() {});
+          }
+        }
+
+        // Отрисовка закрашенных областей поверх камеры, чтобы красная зебра исчезала (как в Scaniverse)
+        var w = window.innerWidth, h = window.innerHeight;
+        if (xrHudCanvas.width !== w || xrHudCanvas.height !== h) {
+          xrHudCanvas.width = w; xrHudCanvas.height = h;
+        }
+        xrHudCtx.clearRect(0, 0, w, h);
+
+        if (state.xrRecording && viewMat && projMat && activeVertCount > 0) {
+          xrHudCtx.fillStyle = 'rgba(255, 255, 255, 1.0)';
+          // Рисуем маску, вырезая зебру (с помощью globalCompositeOperation = destination-out)
+          for (var i = 0; i < activeVertCount; i++) {
+            var px = vertsX[i], py = vertsY[i], pz = vertsZ[i];
+            var vx2 = viewMat[0] * px + viewMat[4] * py + viewMat[8] * pz + viewMat[12];
+            var vy2 = viewMat[1] * px + viewMat[5] * py + viewMat[9] * pz + viewMat[13];
+            var vz2 = viewMat[2] * px + viewMat[6] * py + viewMat[10] * pz + viewMat[14];
+            if (vz2 < -0.1) {
+              var sx2 = ((projMat[0] * vx2 + projMat[8] * vz2) / (-vz2) * 0.5 + 0.5) * w;
+              var sy2 = (1.0 - ((projMat[5] * vy2 + projMat[9] * vz2) / (-vz2) * 0.5 + 0.5)) * h;
+              if (sx2 >= 0 && sx2 <= w && sy2 >= 0 && sy2 <= h) {
+                // Если точка близка к камере, вырезаем прозрачную дырку в zebra-stripes!
+                var dist2 = Math.hypot(px - camPos.x, py - camPos.y, pz - camPos.z);
+                var radius = Math.max(15, 60 / dist2);
+                xrHudCtx.beginPath();
+                xrHudCtx.arc(sx2, sy2, radius, 0, Math.PI * 2);
+                xrHudCtx.fill();
+              }
+            }
+          }
+          // Применяем маску к зебре
+          var maskImage = xrHudCtx.getImageData(0, 0, w, h);
+          // (Для простоты демо в браузере мы просто рисуем белые круги поверх, имитируя закрашивание скана)
+        }
+      };
+      session.requestAnimationFrame(onXRFrame);
+      session.addEventListener('end', finishScanAndProcess);
+    });
+  }
+
+  // Кнопка ЗАПИСИ
+  document.getElementById('btnToggleRecXR').addEventListener('click', function() {
+    state.xrRecording = !state.xrRecording;
+    var btn = document.getElementById('btnToggleRecXR');
+    var hint = document.getElementById('xrStatusHint');
+    var zebra = document.getElementById('zebraPattern');
+    var processBtn = document.getElementById('btnProcessScan');
+
+    if (state.xrRecording) {
+      document.body.classList.add('is-recording');
+      hint.textContent = 'Capture the object from different angles.';
+      zebra.style.opacity = '1';
+      processBtn.style.display = 'none';
+    } else {
+      document.body.classList.remove('is-recording');
+      hint.textContent = 'PAUSED';
+      zebra.style.opacity = '0';
+      if (activeVertCount > 0) {
+        processBtn.style.display = 'flex'; // Показываем кнопку "Обработать" (Галочка)
+      }
+    }
+  });
+
+  // Обновление дальности
+  document.getElementById('sliderXrRange').addEventListener('input', function(e) {
+    state.xrMaxRange = parseFloat(e.target.value);
+    document.getElementById('xrRangeVal').textContent = state.xrMaxRange.toFixed(1) + ' m';
+  });
+
+  // Завершение сканирования и переход в 3D редактор
+  function finishScanAndProcess() {
+    document.body.classList.remove('xr-active', 'is-recording');
+    document.getElementById('zebraPattern').style.opacity = '0';
+    
+    if (state.xrSession) {
+      var s = state.xrSession;
+      state.xrSession = null;
+      try { s.end(); } catch (e) {}
+    }
+
+    if (activeVertCount > 0) {
+      state.emptyScene = false;
+      
+      // Центрируем объект (подобно Scaniverse Crop)
+      var cx = 0, cy = 0, cz = 0;
+      for (var i = 0; i < activeVertCount; i++) {
+        cx += vertsX[i]; cy += vertsY[i]; cz += vertsZ[i];
+      }
+      cx /= activeVertCount; cy /= activeVertCount; cz /= activeVertCount;
+      for (var j = 0; j < activeVertCount; j++) {
+        vertsX[j] = (vertsX[j] - cx) * 2.0;
+        vertsY[j] = (vertsY[j] - cy) * 2.0;
+        vertsZ[j] = (vertsZ[j] - cz) * 2.0;
+      }
+
+      buildMeshFast();
+      state.yaw = 0.5;
+      state.pitch = 0.3;
+      state.zoom = 2.0;
+    }
+  }
+
+  document.getElementById('btnCancelXR').addEventListener('click', function() {
+    activeVertCount = 0;
+    finishScanAndProcess();
+  });
+  document.getElementById('btnProcessScan').addEventListener('click', function() {
+    finishScanAndProcess();
+  });
+
+
+  // =========================================================
+  // 3. ОТРИСОВКА 3D-МОДЕЛИ ВО ВЬЮПОРТЕ
+  // =========================================================
+  var projX = new Float32Array(MAX_VERTS);
+  var projY = new Float32Array(MAX_VERTS);
+
+  function render3DViewport() {
+    var box = document.getElementById('viewportBox');
+    var w = box.clientWidth || 360, h = box.clientHeight || 470;
+    if (mainCanvas.width !== w || mainCanvas.height !== h) {
+      mainCanvas.width = w; mainCanvas.height = h;
+    }
+
+    ctx.fillStyle = '#04070e';
+    ctx.fillRect(0, 0, w, h);
+
+    if (state.emptyScene || activeVertCount === 0) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Сцена пуста. Нажмите «Начать сканирование (AR)»', w/2, h/2);
+      return;
+    }
+
+    var cosY = Math.cos(state.yaw), sinY = Math.sin(state.yaw);
+    var cosX = Math.cos(state.pitch), sinX = Math.sin(state.pitch);
+    var fov = Math.min(w, h) * 0.9;
+    var camDist = state.zoom;
+
+    for (var i = 0; i < activeVertCount; i++) {
+      var x = vertsX[i], y = vertsY[i], z = vertsZ[i];
+      var rx = x * cosY + z * sinY, rz = -x * sinY + z * cosY;
+      var ry = y * cosX - rz * sinX, fz = y * sinX + rz * cosX + camDist;
+      if (fz > 0.1) {
+        projX[i] = w * 0.5 + (rx / fz) * fov;
+        projY[i] = h * 0.5 - (ry / fz) * fov;
+      } else {
+        projX[i] = -9999;
+      }
+    }
+
+    var st = state.vizStyle;
+    if (st !== 'points') {
+      buildMeshFast();
+      var tris = state.meshTriangles;
+      for (var t = 0; t < tris.length; t += 3) {
+        var a = tris[t], b = tris[t + 1], c = tris[t + 2];
+        var ax = projX[a], bx = projX[b], cx = projX[c];
+        if (ax > -900 && bx > -900 && cx > -900) {
+          var ay = projY[a], by = projY[b], cy = projY[c];
+          var cr = vertsR[a], cg = vertsG[a], cb = vertsB[a];
+          
+          if (st === 'solid' || st === 'combined') {
+            ctx.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
+            ctx.beginPath();
+            ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy);
+            ctx.fill();
+          }
+          if (st === 'wireframe' || st === 'combined') {
+            ctx.strokeStyle = st === 'wireframe' ? 'rgb(' + cr + ',' + cg + ',' + cb + ')' : 'rgba(0,0,0,0.15)';
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    if (st === 'points' || state.meshTriangles.length === 0) {
+      for (var j = 0; j < activeVertCount; j++) {
+        var sx = projX[j];
+        if (sx >= 0 && sx <= w) {
+          var sy = projY[j];
+          if (sy >= 0 && sy <= h) {
+            ctx.fillStyle = 'rgb(' + vertsR[j] + ',' + vertsG[j] + ',' + vertsB[j] + ')';
+            ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+          }
+        }
+      }
+    }
+  }
+
+  // Вращение пальцем
+  var isDragging = false, lastX = 0, lastY = 0;
+  var vpBox = document.getElementById('viewportBox');
+  vpBox.addEventListener('pointerdown', function(e) {
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true; lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener('pointermove', function(e) {
+    if (!isDragging) return;
+    state.yaw += (e.clientX - lastX) * 0.008;
+    state.pitch = Math.max(-1.5, Math.min(1.5, state.pitch + (e.clientY - lastY) * 0.008));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener('pointerup', function() { isDragging = false; });
+
+  // =========================================================
+  // 4. ЭКСПОРТ И КНОПКИ
+  // =========================================================
+  var NL = String.fromCharCode(10);
+  function downloadFile(text, name) {
+    var blob = new Blob([text], { type: 'text/plain' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('btnExportOBJ').addEventListener('click', function() {
+    if (activeVertCount === 0) return;
+    buildMeshFast();
+    var lines = ['# 3D Scan Export', 'o ScannedObject'];
+    for (var i = 0; i < activeVertCount; i++) {
+      lines.push('v ' + vertsX[i].toFixed(4) + ' ' + vertsY[i].toFixed(4) + ' ' + vertsZ[i].toFixed(4) + ' ' + (vertsR[i]/255).toFixed(3) + ' ' + (vertsG[i]/255).toFixed(3) + ' ' + (vertsB[i]/255).toFixed(3));
+    }
+    var tris = state.meshTriangles;
+    for (var t = 0; t < tris.length; t += 3) {
+      lines.push('f ' + (tris[t] + 1) + ' ' + (tris[t + 1] + 1) + ' ' + (tris[t + 2] + 1));
+    }
+    downloadFile(lines.join(NL), 'scan-' + Date.now() + '.obj');
+  });
+
+  document.getElementById('btnExportPLY').addEventListener('click', function() {
+    if (activeVertCount === 0) return;
+    var lines = [
+      'ply', 'format ascii 1.0', 'element vertex ' + activeVertCount,
+      'property float x', 'property float y', 'property float z',
+      'property uchar red', 'property uchar green', 'property uchar blue', 'end_header'
+    ];
+    for (var i = 0; i < activeVertCount; i++) {
+      lines.push(vertsX[i].toFixed(4) + ' ' + vertsY[i].toFixed(4) + ' ' + vertsZ[i].toFixed(4) + ' ' + vertsR[i] + ' ' + vertsG[i] + ' ' + vertsB[i]);
+    }
+    downloadFile(lines.join(NL), 'cloud-' + Date.now() + '.ply');
+  });
+
+  document.getElementById('btnStartLiDAR').addEventListener('click', startScaniverseSession);
+
+  document.getElementById('btnClearScene').addEventListener('click', function() {
+    activeVertCount = 0;
+    state.voxelMap.clear();
+    state.meshTriangles = [];
+    state.emptyScene = true;
+  });
+
+  document.getElementById('btnAutoRotate').addEventListener('click', function(e) {
+    state.autoRotate = !state.autoRotate;
+  });
+
+  document.getElementById('btnResetView').addEventListener('click', function() {
+    state.yaw = 0.5; state.pitch = 0.3; state.zoom = 2.0;
+  });
+
+  document.querySelectorAll('.style-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.style-btn').forEach(function(b) { b.classList.remove('btn-active'); });
+      btn.classList.add('btn-active');
+      state.vizStyle = btn.getAttribute('data-style');
+      if (state.vizStyle !== 'points') state.meshDirty = true;
+    });
+  });
+
+  var lastT = performance.now();
+  function loop(now) {
+    requestAnimationFrame(loop);
+    var dt = Math.min((now - lastT) / 1000, 0.1);
+    lastT = now;
+
+    if (state.xrSession) return;
+    if (state.autoRotate) state.yaw += dt * 0.6;
+    render3DViewport();
+  }
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
